@@ -5,49 +5,25 @@ import (
 	"os"        // library for os related operations
 	"os/signal" // library for signal handling such as Ctrl+C and kill signals
 	"syscall"   // library for system call constants
-	"time"      // library for time formatting
+
+	"github.com/dhruvsoni1802/browser-query-ai/internal/config"
 )
-
-//Function to initialize the logger
-func setupLogger() *slog.Logger {
-	var handler slog.Handler
-
-	if os.Getenv("ENV") == "production" {
-
-		// Initialize JSON handler for production environment
-		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{ Level: slog.LevelInfo })
-	} else {
-
-		// Initialize Text handler for development environment with better formatting
-		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{ 
-			Level: slog.LevelDebug,
-			AddSource: false,
-			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-				// Format timestamp to be more readable
-				if a.Key == slog.TimeKey {
-					t := a.Value.Time()
-					return slog.String("time", t.Format(time.DateTime))
-				}
-				return a
-			},
-		})
-	}
-
-	// Create a new logger with the initialized handler
-	return slog.New(handler)
-}
 
 // Main entry point of the program
 func main() {
 
 	// Setup the logger
-	logger := setupLogger()
+	logger := InitializeLogger()
 	slog.SetDefault(logger)
 
-	var serverPort string = "8080"
-	var debugPort int = 9222 // Default debug port for Chrome DevTools
+	// Load the configuration
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("failed to load configuration", "error", err)
+		os.Exit(1)
+	}
 
-	slog.Info("Browser Query AI Server starting", "server_port", serverPort, "debug_port", debugPort)
+	slog.Info("configuration loaded", "chromium_path", cfg.ChromiumPath, "server_port", cfg.ServerPort, "max_browsers", cfg.MaxBrowsers)
 
 	// Create a channel to receive shutdown signals
 	quit := make(chan os.Signal, 1)
