@@ -1,6 +1,6 @@
 # Browser Query AI
 
-A browser automation service built with Go.
+A browser query AI service built with Go.
 
 ## Getting Started
 
