@@ -53,6 +53,7 @@ func (m *Manager) GetOrCreateCDPClient(port int) (*cdp.Client, error) {
 	}
 
 	// If the client does not exist, discover the WebSocket URL
+	// TODO: Change this later so that we can use something other than localhost such as actual IP address of the machine
 	wsURL, err := cdp.GetWebSocketURL("localhost", strconv.Itoa(port))
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover WebSocket URL: %w", err)

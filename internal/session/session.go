@@ -1,6 +1,9 @@
 package session
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/dhruvsoni1802/browser-query-ai/internal/cdp"
@@ -54,4 +57,101 @@ func (s *Session) RemovePage(pageID string) {
 		}
 	}
 	s.UpdateActivity()
+}
+
+// CaptureScreenshot takes a screenshot of the page
+func (s *Session) CaptureScreenshot(targetID string) ([]byte, error) {
+	params := map[string]interface{}{
+		"format": "png",
+	}
+
+	result, err := s.CDPClient.SendCommandToTarget(targetID, "Page.captureScreenshot", params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to capture screenshot: %w", err)
+	}
+
+	var response struct {
+		Data string `json:"data"`
+	}
+
+	if err := json.Unmarshal(result, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse screenshot response: %w", err)
+	}
+
+	imageBytes, err := base64.StdEncoding.DecodeString(response.Data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode screenshot: %w", err)
+	}
+
+	return imageBytes, nil
+}
+
+// ExecuteJavascript executes JavaScript code on the page
+func (s *Session) ExecuteJavascript(targetID string, code string) (interface{}, error) {
+	params := map[string]interface{}{
+		"expression":    code,
+		"returnByValue": true,
+	}
+
+	result, err := s.CDPClient.SendCommandToTarget(targetID, "Runtime.evaluate", params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute javascript: %w", err)
+	}
+
+	var response struct {
+		Result struct {
+			Type  string      `json:"type"`
+			Value interface{} `json:"value"`
+		} `json:"result"`
+		ExceptionDetails interface{} `json:"exceptionDetails,omitempty"`
+	}
+
+	if err := json.Unmarshal(result, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse execution result: %w", err)
+	}
+
+	if response.ExceptionDetails != nil {
+		return nil, fmt.Errorf("javascript execution error: %v", response.ExceptionDetails)
+	}
+
+	return response.Result.Value, nil
+}
+
+// GetPageContent gets the HTML content of a page
+func (s *Session) GetPageContent(targetID string) (string, error) {
+	// Step 1: Get document
+	result, err := s.CDPClient.SendCommandToTarget(targetID, "DOM.getDocument", nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to get document: %w", err)
+	}
+
+	var docResponse struct {
+		Root struct {
+			NodeID int `json:"nodeId"`
+		} `json:"root"`
+	}
+
+	if err := json.Unmarshal(result, &docResponse); err != nil {
+		return "", fmt.Errorf("failed to parse document response: %w", err)
+	}
+
+	// Step 2: Get outer HTML
+	params := map[string]interface{}{
+		"nodeId": docResponse.Root.NodeID,
+	}
+
+	result, err = s.CDPClient.SendCommandToTarget(targetID, "DOM.getOuterHTML", params)
+	if err != nil {
+		return "", fmt.Errorf("failed to get outer HTML: %w", err)
+	}
+
+	var htmlResponse struct {
+		OuterHTML string `json:"outerHTML"`
+	}
+
+	if err := json.Unmarshal(result, &htmlResponse); err != nil {
+		return "", fmt.Errorf("failed to parse HTML response: %w", err)
+	}
+
+	return htmlResponse.OuterHTML, nil
 }
