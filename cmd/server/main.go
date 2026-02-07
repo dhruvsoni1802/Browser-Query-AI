@@ -64,6 +64,27 @@ func main() {
 	// Log the WebSocket URL
 	slog.Info("discovered WebSocket URL", "url", wsURL)
 
+	// Create a new CDP client
+	client := cdp.NewClient(wsURL)
+
+	// Connect CDP client to browser
+	if err := client.Connect(); err != nil {
+		slog.Error("failed to connect to CDP client", "error", err)
+		proc.Stop()
+		os.Exit(1)
+	}
+
+	slog.Info("CDP client connected successfully")
+
+	// Test sending a simple CDP command
+	slog.Info("testing CDP command - getting browser version")
+	result, err := client.SendCommand("Browser.getVersion", nil)
+	if err != nil {
+			slog.Error("failed to get browser version", "error", err)
+	} else {
+			slog.Info("browser version received", "result", string(result))
+	}
+
 	// Setup graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -73,6 +94,11 @@ func main() {
 	// Wait for shutdown signal
 	sig := <-quit
 	slog.Info("shutdown initiated", "signal", sig.String())
+
+	// Close the CDP client
+	if err := client.Close(); err != nil {
+		slog.Error("failed to close CDP client", "error", err)
+	}
 
 	// Stop the browser
 	if err := proc.Stop(); err != nil {
