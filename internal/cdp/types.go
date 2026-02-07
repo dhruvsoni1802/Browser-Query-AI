@@ -10,6 +10,7 @@ type Command struct {
 }
 
 // Response represents a CDP response from the browser
+// RawMessage is a raw JSON message from the browser. This is because the response can be of any type which we don't know about in advance. We will unmarshal it into the appropriate type later.
 type Response struct {
 	ID     int             `json:"id"`
 	Result json.RawMessage `json:"result,omitempty"`
