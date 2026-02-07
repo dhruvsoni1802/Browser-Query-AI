@@ -10,6 +10,16 @@ Run the server:
 go run ./cmd/server
 ```
 
+Run the tests:
+```bash
+go test -v ./internal/session/...
+```
+
+Run the tests with race detection:
+
+```bash
+go test -race ./internal/session/...
+```
 ## Environment Variables
 
 The following environment variables can be set to configure the service:
