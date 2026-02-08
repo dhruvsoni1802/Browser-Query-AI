@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/dhruvsoni1802/browser-query-ai/internal/api"
-	"github.com/dhruvsoni1802/browser-query-ai/internal/browser"
 	"github.com/dhruvsoni1802/browser-query-ai/internal/config"
+	"github.com/dhruvsoni1802/browser-query-ai/internal/pool"
 	"github.com/dhruvsoni1802/browser-query-ai/internal/session"
 )
 
@@ -32,25 +32,19 @@ func main() {
 		"max_browsers", cfg.MaxBrowsers,
 	)
 
-	// Create and start browser process
-	proc, err := browser.NewProcess(cfg.ChromiumPath)
+	// Create process pool
+	processPool, err := pool.NewProcessPool(cfg.ChromiumPath, cfg.MaxBrowsers)
 	if err != nil {
-		slog.Error("failed to create browser process", "error", err)
+		slog.Error("failed to create process pool", "error", err)
 		os.Exit(1)
 	}
+	defer processPool.Shutdown()
 
-	if err := proc.Start(); err != nil {
-		slog.Error("failed to start browser", "error", err)
-		os.Exit(1)
-	}
+	slog.Info("process pool created", "size", cfg.MaxBrowsers)
 
-	slog.Info("browser process started",
-		"pid", proc.GetPID(),
-		"debug_port", proc.DebugPort,
-	)
-
-	// Wait for browser to initialize
-	time.Sleep(2 * time.Second)
+	// Create load balancer
+	loadBalancer := pool.NewLoadBalancer(processPool)
+	slog.Info("load balancer initialized")
 
 	// Create session manager
 	manager := session.NewManager()
@@ -59,7 +53,7 @@ func main() {
 	slog.Info("session manager initialized")
 
 	// Create and start HTTP API server
-	apiServer := api.NewServer(cfg.ServerPort, manager, proc.DebugPort)
+	apiServer := api.NewServer(cfg.ServerPort, manager, loadBalancer)
 
 	// Start HTTP server in goroutine
 	go func() {
@@ -77,7 +71,7 @@ func main() {
 
 	slog.Info("service ready",
 		"http_port", cfg.ServerPort,
-		"browser_port", proc.DebugPort,
+		"browser_processes", cfg.MaxBrowsers,
 		"status", "press Ctrl+C to shutdown",
 	)
 
@@ -99,15 +93,10 @@ func main() {
 		slog.Error("session manager close error", "error", err)
 	}
 
-	// Stop browser
-	if err := proc.Stop(); err != nil {
-		slog.Error("browser stop error", "error", err)
+	// Shutdown process pool
+	if err := processPool.Shutdown(); err != nil {
+		slog.Error("process pool shutdown error", "error", err)
 	}
 
-	// Get port stats
-	total, available := browser.GetPoolStats()
-	slog.Info("shutdown complete",
-		"ports_total", total,
-		"ports_available", available,
-	)
+	slog.Info("shutdown complete")
 }
