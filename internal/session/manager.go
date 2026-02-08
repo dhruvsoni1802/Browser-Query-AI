@@ -1,9 +1,11 @@
 package session
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"sync"
 	"time"
@@ -13,16 +15,22 @@ import (
 
 // Manager manages all active sessions and CDP connections
 type Manager struct {
-	sessions   map[string]*Session // sessionID → Pointer to Session Struct
-	cdpClients map[int]*cdp.Client // Browser process port → Pointer to CDP Client Struct
-	mu         sync.RWMutex        // Protects concurrent access
+	sessions   map[string]*Session
+	cdpClients map[int]*cdp.Client
+	mu         sync.RWMutex
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 // NewManager creates a new session manager
 func NewManager() *Manager {
+	ctx, cancel := context.WithCancel(context.Background())
+	
 	return &Manager{
 		sessions:   make(map[string]*Session),
 		cdpClients: make(map[int]*cdp.Client),
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 }
 
@@ -186,15 +194,18 @@ func (m *Manager) GetSessionCount() int {
 	return len(m.sessions)
 }
 
-// Close closes all CDP connections (cleanup on service shutdown)
+// Close closes all CDP connections and stops background workers
 func (m *Manager) Close() error {
+	// Signal cleanup worker to stop
+	m.cancel()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Close all CDP clients
 	for port, client := range m.cdpClients {
 		if err := client.Close(); err != nil {
-			fmt.Printf("warning: failed to close CDP client on port %d: %v\n", port, err)
+			slog.Warn("failed to close CDP client", "port", port, "error", err)
 		}
 	}
 
@@ -203,4 +214,59 @@ func (m *Manager) Close() error {
 	m.cdpClients = make(map[int]*cdp.Client)
 
 	return nil
+}
+
+// StartCleanupWorker starts a background worker to clean up expired sessions
+func (m *Manager) StartCleanupWorker(interval, timeout time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		slog.Info("cleanup worker started", 
+			"check_interval", interval, 
+			"session_timeout", timeout)
+
+		for {
+			select {
+			case <-m.ctx.Done():
+				slog.Info("cleanup worker stopping")
+				return
+
+			case <-ticker.C:
+				m.cleanupExpiredSessions(timeout)
+			}
+		}
+	}()
+}
+
+// cleanupExpiredSessions removes sessions inactive for longer than timeout
+func (m *Manager) cleanupExpiredSessions(timeout time.Duration) {
+	// Phase 1: Collect expired session IDs (read lock)
+	m.mu.RLock()
+	expiredIDs := make([]string, 0)
+	
+	for sessionID, session := range m.sessions {
+		if session.IsExpired(timeout) {
+			expiredIDs = append(expiredIDs, sessionID)
+		}
+	}
+	m.mu.RUnlock()
+
+	// Phase 2: Destroy expired sessions (each acquires its own lock)
+	if len(expiredIDs) > 0 {
+		slog.Info("cleaning up expired sessions", 
+			"count", len(expiredIDs),
+			"timeout", timeout)
+		
+		for _, sessionID := range expiredIDs {
+			if err := m.DestroySession(sessionID); err != nil {
+				slog.Warn("failed to destroy expired session", 
+					"session_id", sessionID, 
+					"error", err)
+			} else {
+				slog.Debug("destroyed expired session", 
+					"session_id", sessionID)
+			}
+		}
+	}
 }
