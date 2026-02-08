@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/dhruvsoni1802/browser-query-ai/internal/api"
 	"github.com/dhruvsoni1802/browser-query-ai/internal/browser"
 	"github.com/dhruvsoni1802/browser-query-ai/internal/config"
 	"github.com/dhruvsoni1802/browser-query-ai/internal/session"
@@ -56,122 +58,26 @@ func main() {
 
 	slog.Info("session manager initialized")
 
-	// ========================================
-	// DEMO: Complete Session Workflow
-	// ========================================
+	// Create and start HTTP API server
+	apiServer := api.NewServer(cfg.ServerPort, manager, proc.DebugPort)
 
-	// 1. Create a session
-	slog.Info("=== Step 1: Creating session ===")
-	sess, err := manager.CreateSession(proc.DebugPort)
-	if err != nil {
-		slog.Error("failed to create session", "error", err)
-		proc.Stop()
-		os.Exit(1)
-	}
-
-	slog.Info("session created",
-		"session_id", sess.ID,
-		"context_id", sess.ContextID,
-	)
-
-	// 2. Navigate to a website
-	slog.Info("=== Step 2: Navigating to example.com ===")
-	pageID, err := manager.Navigate(sess.ID, "https://example.com")
-	if err != nil {
-		slog.Error("failed to navigate", "error", err)
-		manager.DestroySession(sess.ID)
-		proc.Stop()
-		os.Exit(1)
-	}
-
-	slog.Info("navigation complete", "page_id", pageID)
-
-	// Wait for page to load
-	time.Sleep(2 * time.Second)
-
-	// 3. Execute JavaScript to get page title
-	slog.Info("=== Step 3: Executing JavaScript ===")
-	title, err := manager.ExecuteJavascript(sess.ID, pageID, "document.title")
-	if err != nil {
-		slog.Error("failed to execute JavaScript", "error", err)
-	} else {
-		slog.Info("page title retrieved", "title", title)
-	}
-
-	// 4. Get page URL
-	url, err := manager.ExecuteJavascript(sess.ID, pageID, "window.location.href")
-	if err != nil {
-		slog.Error("failed to get URL", "error", err)
-	} else {
-		slog.Info("page URL retrieved", "url", url)
-	}
-
-	// 5. Get page content (HTML)
-	slog.Info("=== Step 4: Getting page content ===")
-	content, err := manager.GetPageContent(sess.ID, pageID)
-	if err != nil {
-		slog.Error("failed to get page content", "error", err)
-	} else {
-		slog.Info("page content retrieved", "length", len(content))
-	}
-
-	// 6. Capture screenshot
-	slog.Info("=== Step 5: Capturing screenshot ===")
-	screenshot, err := manager.CaptureScreenshot(sess.ID, pageID)
-	if err != nil {
-		slog.Error("failed to capture screenshot", "error", err)
-	} else {
-		// Save screenshot to file
-		filename := "example_screenshot.png"
-		if err := os.WriteFile(filename, screenshot, 0644); err != nil {
-			slog.Error("failed to save screenshot", "error", err)
-		} else {
-			slog.Info("screenshot saved", "filename", filename, "size", len(screenshot))
+	// Start HTTP server in goroutine
+	go func() {
+		if err := apiServer.Start(); err != nil {
+			slog.Error("HTTP server error", "error", err)
+			os.Exit(1)
 		}
-	}
+	}()
 
-	// 7. Open another page in the same session
-	slog.Info("=== Step 6: Opening second page ===")
-	pageID2, err := manager.Navigate(sess.ID, "https://example.org")
-	if err != nil {
-		slog.Error("failed to navigate to second page", "error", err)
-	} else {
-		slog.Info("second page opened", "page_id", pageID2)
-		
-		// Wait and get title of second page
-		time.Sleep(2 * time.Second)
-		title2, err := manager.ExecuteJavascript(sess.ID, pageID2, "document.title")
-		if err != nil {
-			slog.Error("failed to get second page title", "error", err)
-		} else {
-			slog.Info("second page title", "title", title2)
-		}
-	}
-
-	// 8. Show session stats
-	slog.Info("=== Session Statistics ===",
-		"session_id", sess.ID,
-		"total_pages", len(sess.PageIDs),
-		"pages", sess.PageIDs,
-		"created_at", sess.CreatedAt,
-		"last_activity", sess.LastActivity,
-	)
-
-	// 9. Close first page
-	slog.Info("=== Step 7: Closing first page ===")
-	if err := manager.ClosePage(sess.ID, pageID); err != nil {
-		slog.Error("failed to close page", "error", err)
-	} else {
-		slog.Info("first page closed", "remaining_pages", len(sess.PageIDs))
-	}
+	slog.Info("HTTP API server started", "port", cfg.ServerPort)
 
 	// Setup graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	slog.Info("=== Demo Complete ===")
 	slog.Info("service ready",
-		"active_sessions", manager.GetSessionCount(),
+		"http_port", cfg.ServerPort,
+		"browser_port", proc.DebugPort,
 		"status", "press Ctrl+C to shutdown",
 	)
 
@@ -179,16 +85,26 @@ func main() {
 	sig := <-quit
 	slog.Info("shutdown initiated", "signal", sig.String())
 
-	// Cleanup
-	slog.Info("cleaning up sessions")
-	if err := manager.DestroySession(sess.ID); err != nil {
-		slog.Error("failed to destroy session", "error", err)
+	// Graceful shutdown with timeout
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Shutdown HTTP server
+	if err := apiServer.Shutdown(shutdownCtx); err != nil {
+		slog.Error("HTTP server shutdown error", "error", err)
 	}
 
+	// Close session manager
+	if err := manager.Close(); err != nil {
+		slog.Error("session manager close error", "error", err)
+	}
+
+	// Stop browser
 	if err := proc.Stop(); err != nil {
-		slog.Error("failed to stop browser", "error", err)
+		slog.Error("browser stop error", "error", err)
 	}
 
+	// Get port stats
 	total, available := browser.GetPoolStats()
 	slog.Info("shutdown complete",
 		"ports_total", total,
