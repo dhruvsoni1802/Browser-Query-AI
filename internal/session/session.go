@@ -15,6 +15,7 @@ type SessionStatus string
 const (
 	SessionActive  SessionStatus = "active"   // Session is running
 	SessionClosed  SessionStatus = "closed"   // Session was explicitly closed
+	SessionIdle    SessionStatus = "idle"     // Session is idle
 	SessionExpired SessionStatus = "expired"  // Session timed out
 )
 

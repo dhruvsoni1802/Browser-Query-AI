@@ -25,6 +25,24 @@ func (r *SessionRepository) UpdateLastActivity(sessionID string) error {
 	return nil
 }
 
+// UpdateSessionStatus updates just the session status field
+func (r *SessionRepository) UpdateSessionStatus(sessionID string, status string) error {
+	key := fmt.Sprintf("session:%s", sessionID)
+
+	// Update single field
+	err := r.redis.client.HSet(r.redis.ctx, key, "status", status).Err()
+	if err != nil {
+		return fmt.Errorf("failed to update session status: %w", err)
+	}
+
+	// Refresh TTL
+	if err := r.redis.client.Expire(r.redis.ctx, key, r.ttl).Err(); err != nil {
+		slog.Warn("failed to refresh TTL", "error", err)
+	}
+
+	return nil
+}
+
 // SaveCookies stores cookies as JSON string
 func (r *SessionRepository) SaveCookies(sessionID string, cookies []Cookie) error {
 	if len(cookies) == 0 {

@@ -50,6 +50,7 @@ func NewServer(port string, manager *session.Manager, loadBalancer *pool.LoadBal
 		r.Route("/{id}", func(r chi.Router) {
 			r.Get("/", handlers.GetSession)
 			r.Delete("/", handlers.DestroySession)
+			r.Put("/close", handlers.CloseSession)
 			r.Post("/navigate", handlers.Navigate)
 			r.Post("/execute", handlers.ExecuteJS)
 			r.Post("/screenshot", handlers.CaptureScreenshot)

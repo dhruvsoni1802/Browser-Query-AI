@@ -94,26 +94,27 @@ func (h *Handlers) CreateSession(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) DestroySession(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "id")
 
-	// Get session first to know which process it's on
+	// Try to get session to know which process it's on (may not be in memory if closed)
+	var processPort int
 	sess, err := h.sessionManager.GetSession(sessionID)
-	if err != nil {
+	if err == nil {
+		processPort = sess.ProcessPort
+	}
+
+	// Destroy session (works whether in memory or Redis only)
+	if err := h.sessionManager.DestroySession(sessionID); err != nil {
 		writeError(w, http.StatusNotFound, ErrCodeSessionNotFound, err.Error())
 		return
 	}
 
-	// Destroy session
-	if err := h.sessionManager.DestroySession(sessionID); err != nil {
-		writeError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
-		return
-	}
-
-	// Decrement session count on the process
-	// Find the process by port
-	processes := h.loadBalancer.GetProcesses()
-	for _, process := range processes {
-		if process.GetPort() == sess.ProcessPort {
-			process.DecrementSessionCount()
-			break
+	// Decrement session count on the process if we found it
+	if processPort > 0 {
+		processes := h.loadBalancer.GetProcesses()
+		for _, process := range processes {
+			if process.GetPort() == processPort {
+				process.DecrementSessionCount()
+				break
+			}
 		}
 	}
 
@@ -464,5 +465,42 @@ func (h *Handlers) RenameSession(w http.ResponseWriter, r *http.Request) {
 		"agent_id":     sess.AgentID,
 	}
 	
+	writeJSON(w, http.StatusOK, response)
+}
+
+// CloseSession handles PUT /sessions/{id}/close
+func (h *Handlers) CloseSession(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "id")
+
+	// Get session first to know which process it's on
+	sess, err := h.sessionManager.GetSession(sessionID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, ErrCodeSessionNotFound, err.Error())
+		return
+	}
+
+	// Close session (keeps in Redis)
+	if err := h.sessionManager.CloseSession(sessionID); err != nil {
+		writeError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
+		return
+	}
+
+	// Decrement session count on the process
+	processes := h.loadBalancer.GetProcesses()
+	for _, process := range processes {
+		if process.GetPort() == sess.ProcessPort {
+			process.DecrementSessionCount()
+			break
+		}
+	}
+
+	// Return success
+	response := map[string]interface{}{
+		"session_id":   sessionID,
+		"session_name": sess.Name,
+		"status":       "idle",
+		"message":      "Session closed. Pages were disposed and cannot be resumed.",
+	}
+
 	writeJSON(w, http.StatusOK, response)
 }

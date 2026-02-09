@@ -147,46 +147,50 @@ func (m *Manager) GetSession(sessionID string) (*Session, error) {
 
 // DestroySession cleans up all resources for a session
 func (m *Manager) DestroySession(sessionID string) error {
-	// Acquire write lock (exclusive access)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Get session from map
 	session, exists := m.sessions[sessionID]
-	if !exists {
-		return fmt.Errorf("session not found: %s", sessionID)
-	}
-
-	// Close all pages in this session
-	for _, pageID := range session.PageIDs {
-		if err := session.CDPClient.CloseTarget(pageID); err != nil {
-			// Log error but continue cleanup
-			fmt.Printf("warning: failed to close page %s: %v\n", pageID, err)
+	
+	// If session is in memory, clean up browser resources
+	if exists {
+		// Close all pages
+		for _, pageID := range session.PageIDs {
+			if err := session.CDPClient.CloseTarget(pageID); err != nil {
+				slog.Warn("failed to close page", "page_id", pageID, "error", err)
+			}
 		}
+
+		// Dispose browser context
+		if err := session.CDPClient.DisposeBrowserContext(session.ContextID); err != nil {
+			slog.Warn("failed to dispose browser context", "error", err)
+			// Don't fail - continue with cleanup
+		}
+
+		// Mark as closed and remove from memory
+		session.Status = SessionClosed
+		delete(m.sessions, sessionID)
+	} else {
+		// Session not in memory - might be idle in Redis
+		slog.Info("destroying session not in memory (likely idle)", "session_id", sessionID)
 	}
 
-	// Dispose the browser context
-	if err := session.CDPClient.DisposeBrowserContext(session.ContextID); err != nil {
-		return fmt.Errorf("failed to dispose browser context: %w", err)
-	}
-
-	// Delete from Redis (this now handles name cleanup too)
+	// Delete from Redis (works whether session is in memory or not)
 	if m.repo != nil {
 		if err := m.repo.DeleteSession(sessionID); err != nil {
 			slog.Warn("failed to delete session from Redis", "error", err)
+			// If session wasn't in memory and not in Redis, that's an error
+			if !exists {
+				return fmt.Errorf("session not found: %s", sessionID)
+			}
 		}
+	} else if !exists {
+		// No Redis and not in memory = truly not found
+		return fmt.Errorf("session not found: %s", sessionID)
 	}
 
-	// Mark session as closed
-	session.Status = SessionClosed
-
-	// Remove from map
-	delete(m.sessions, sessionID)
-
 	slog.Info("session destroyed", 
-		"session_id", sessionID,
-		"session_name", session.Name,
-		"agent_id", session.AgentID)
+		"session_id", sessionID)
 
 	return nil
 }
@@ -489,7 +493,6 @@ func (m *Manager) ResumeSessionByName(agentID, sessionName string) (*Session, er
 	return session, nil
 }
 
-// resurrectSession rebuilds a session from Redis state
 func (m *Manager) resurrectSession(state *storage.SessionState) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -500,31 +503,47 @@ func (m *Manager) resurrectSession(state *storage.SessionState) (*Session, error
 		return nil, fmt.Errorf("failed to reconnect to browser: %w", err)
 	}
 	
+	// Create a new browser context (old one was disposed when session was closed)
+	contextID, err := client.CreateBrowserContext()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create browser context: %w", err)
+	}
+	
 	// Recreate session object
 	session := &Session{
 		ID:           state.SessionID,
-		Name:         state.SessionName,
+		Name:         state.SessionName,  // Should not be empty!
 		AgentID:      state.AgentID,
 		ProcessPort:  state.ProcessPort,
-		ContextID:    state.ContextID,
+		ContextID:    contextID,  // Use new context ID
 		PageIDs:      []string{},
 		CDPClient:    client,
 		CreatedAt:    state.CreatedAt,
 		LastActivity: time.Now(),
-		Status:       SessionStatus(state.Status),
+		Status:       SessionActive,  // ← FIX: Set to ACTIVE when resurrecting
 	}
 	
-	// Restore pages
-	for _, pageState := range state.Pages {
-		session.PageIDs = append(session.PageIDs, pageState.PageID)
-	}
+	// Don't restore pages - they were closed when session was closed
 	
 	// Add to manager
 	m.sessions[session.ID] = session
 	
-	// Update last activity in Redis
+	// Update status to ACTIVE in Redis and save new context ID
 	if m.repo != nil {
-		m.repo.UpdateLastActivity(session.ID)
+		if err := m.repo.UpdateLastActivity(session.ID); err != nil {
+			slog.Warn("failed to update last activity", "error", err)
+		}
+		
+		// Update status to active and save new context ID
+		if err := m.repo.UpdateSessionStatus(session.ID, "active"); err != nil {
+			slog.Warn("failed to update session status", "error", err)
+		}
+		
+		// Save updated session state with new context ID
+		updatedState := m.sessionToState(session)
+		if err := m.repo.SaveSession(updatedState); err != nil {
+			slog.Warn("failed to update session context in Redis", "error", err)
+		}
 	}
 	
 	return session, nil
@@ -623,6 +642,57 @@ func (m *Manager) RenameSession(sessionID, newName string) error {
 		"old_name", oldName,
 		"new_name", newName)
 	
+	return nil
+}
+
+// CloseSession disconnects from browser but keeps in Redis
+func (m *Manager) CloseSession(sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	session, exists := m.sessions[sessionID]
+	if !exists {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	// Close all pages
+	for _, pageID := range session.PageIDs {
+		if err := session.CDPClient.CloseTarget(pageID); err != nil {
+			slog.Warn("failed to close page", "page_id", pageID, "error", err)
+		}
+	}
+
+	// Dispose browser context
+	if err := session.CDPClient.DisposeBrowserContext(session.ContextID); err != nil {
+		slog.Warn("failed to dispose browser context", "error", err)
+	}
+
+	// Update status to IDLE in Redis
+	session.Status = SessionIdle
+	// Clear pages - they're destroyed with the context and can't be restored
+	session.PageIDs = []string{}
+	
+	if m.repo != nil {
+		state := m.sessionToState(session)
+		state.Status = string(SessionIdle)
+
+		if state.SessionName == "" {
+			state.SessionName = session.Name
+		}
+		
+		if err := m.repo.SaveSession(state); err != nil {
+			slog.Warn("failed to update session status in Redis", "error", err)
+		}
+	}
+
+	// Remove from memory only
+	delete(m.sessions, sessionID)
+
+	slog.Info("session closed (kept in Redis)", 
+		"session_id", sessionID,
+		"session_name", session.Name,
+		"agent_id", session.AgentID)
+
 	return nil
 }
 

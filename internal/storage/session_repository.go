@@ -24,11 +24,17 @@ func NewSessionRepository(redisClient *RedisClient, ttl time.Duration) *SessionR
 
 // SaveSession persists session state to Redis using Hash
 func (r *SessionRepository) SaveSession(state *SessionState) error {
+	state.EnsureSessionName()
+	if err := state.Validate(); err != nil {
+		return fmt.Errorf("invalid session state: %w", err)
+	}
+
 	key := fmt.Sprintf("session:%s", state.SessionID)
 
 	// Build hash fields (basic metadata)
 	fields := map[string]interface{}{
 		"session_id":    state.SessionID,
+		"session_name":  state.SessionName,
 		"agent_id":      state.AgentID,
 		"process_port":  state.ProcessPort,
 		"context_id":    state.ContextID,
@@ -36,6 +42,12 @@ func (r *SessionRepository) SaveSession(state *SessionState) error {
 		"last_activity": state.LastActivity.Format(time.RFC3339),
 		"status":        state.Status,
 	}
+
+		slog.Debug("saving session to Redis", 
+		"session_id", state.SessionID,
+		"session_name", state.SessionName,
+		"status", state.Status,
+		)
 
 	// Store hash in Redis
 	if err := r.redis.client.HSet(r.redis.ctx, key, fields).Err(); err != nil {
@@ -103,9 +115,15 @@ func (r *SessionRepository) GetSession(sessionID string) (*SessionState, error) 
 		return nil, fmt.Errorf("session not found: %s", sessionID)
 	}
 
+	slog.Debug("loaded session from Redis", 
+		"session_id", sessionID,
+		"session_name", data["session_name"],
+		"status", data["status"])
+
 	// Parse fields
 	state := &SessionState{
 		SessionID:    data["session_id"],
+		SessionName:  data["session_name"],
 		AgentID:      data["agent_id"],
 		ContextID:    data["context_id"],
 		Status:       data["status"],
@@ -149,41 +167,36 @@ func (r *SessionRepository) ListActiveSessions() ([]string, error) {
 	return sessions, nil
 }
 
-// DeleteSession removes session from Redis
+
 func (r *SessionRepository) DeleteSession(sessionID string) error {
 	key := fmt.Sprintf("session:%s", sessionID)
 
-	// First, get session to know agent_id and session_name
 	data, err := r.redis.client.HGetAll(r.redis.ctx, key).Result()
-	if err == nil && len(data) > 0 {
-		agentID := data["agent_id"]
-		sessionName := data["session_name"]
-		
-		// Release the session name
-		if agentID != "" && sessionName != "" {
-			if err := r.ReleaseSessionName(agentID, sessionName); err != nil {
-				slog.Warn("failed to release session name", "error", err)
-			}
-		}
-		
-		// Remove from agent's sessions set
-		if agentID != "" {
-			agentKey := fmt.Sprintf("agent:%s:sessions", agentID)
-			r.redis.client.SRem(r.redis.ctx, agentKey, sessionID)
-		}
+	if err != nil {
+		return fmt.Errorf("failed to get session: %w", err)
 	}
 
-	// Delete main session hash
-	if err := r.redis.client.Del(r.redis.ctx, key).Err(); err != nil {
-		return fmt.Errorf("failed to delete session: %w", err)
+	agentID := data["agent_id"]
+	sessionName := data["session_name"]
+	
+	if agentID != "" && sessionName != "" {
+		r.ReleaseSessionName(agentID, sessionName)
+	}
+	
+	if agentID != "" {
+		agentKey := fmt.Sprintf("agent:%s:sessions", agentID)
+		r.redis.client.SRem(r.redis.ctx, agentKey, sessionID)
 	}
 
+	// Delete session hash
+	r.redis.client.Del(r.redis.ctx, key)
+	
 	// Delete associated data
 	r.redis.client.Del(r.redis.ctx, fmt.Sprintf("session:%s:cookies", sessionID))
 	r.redis.client.Del(r.redis.ctx, fmt.Sprintf("session:%s:localStorage", sessionID))
 	r.redis.client.Del(r.redis.ctx, fmt.Sprintf("session:%s:pages", sessionID))
 
-	// Remove from active sessions set
+	// Remove from active sessions
 	r.redis.client.SRem(r.redis.ctx, "active:sessions", sessionID)
 
 	slog.Debug("session deleted from Redis", "session_id", sessionID)
