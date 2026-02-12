@@ -113,14 +113,15 @@ func (m *Manager) CreateSession(port int) (*Session, error) {
 
 	// Create a new session struct
 	session := &Session{
-		ID:           sessionID,
-		ProcessPort:  port,
-		ContextID:    contextID,
-		PageIDs:      []string{},
-		CDPClient:    client,
-		CreatedAt:    time.Now(),
-		LastActivity: time.Now(),
-		Status:       SessionActive,
+		ID:                sessionID,
+		ProcessPort:       port,
+		ContextID:         contextID,
+		PageIDs:           []string{},
+		CDPClient:         client,
+		CreatedAt:         time.Now(),
+		LastActivity:      time.Now(),
+		Status:            SessionActive,
+		pageAnalysisCache: make(map[string]*PageStructure),
 	}
 
 	// Add the session to the manager
@@ -340,16 +341,17 @@ func (m *Manager) CreateSessionWithName(agentID, sessionName string, port int) (
 
 	// Create session with name
 	session := &Session{
-		ID:           sessionID,
-		Name:         sessionName,  // ← ADD (will be auto-generated if empty)
-		AgentID:      agentID,      // ← ADD
-		ProcessPort:  port,
-		ContextID:    contextID,
-		PageIDs:      []string{},
-		CDPClient:    client,
-		CreatedAt:    time.Now(),
-		LastActivity: time.Now(),
-		Status:       SessionActive,
+		ID:                sessionID,
+		Name:              sessionName,  // ← ADD (will be auto-generated if empty)
+		AgentID:           agentID,      // ← ADD
+		ProcessPort:       port,
+		ContextID:         contextID,
+		PageIDs:           []string{},
+		CDPClient:         client,
+		CreatedAt:         time.Now(),
+		LastActivity:      time.Now(),
+		Status:            SessionActive,
+		pageAnalysisCache: make(map[string]*PageStructure),
 	}
 
 	// Auto-generate name if not provided
@@ -511,16 +513,17 @@ func (m *Manager) resurrectSession(state *storage.SessionState) (*Session, error
 	
 	// Recreate session object
 	session := &Session{
-		ID:           state.SessionID,
-		Name:         state.SessionName,  // Should not be empty!
-		AgentID:      state.AgentID,
-		ProcessPort:  state.ProcessPort,
-		ContextID:    contextID,  // Use new context ID
-		PageIDs:      []string{},
-		CDPClient:    client,
-		CreatedAt:    state.CreatedAt,
-		LastActivity: time.Now(),
-		Status:       SessionActive,  // ← FIX: Set to ACTIVE when resurrecting
+		ID:                state.SessionID,
+		Name:              state.SessionName,  // Should not be empty!
+		AgentID:           state.AgentID,
+		ProcessPort:       state.ProcessPort,
+		ContextID:         contextID,  // Use new context ID
+		PageIDs:           []string{},
+		CDPClient:         client,
+		CreatedAt:         state.CreatedAt,
+		LastActivity:      time.Now(),
+		Status:            SessionActive,  // ← FIX: Set to ACTIVE when resurrecting
+		pageAnalysisCache: make(map[string]*PageStructure),
 	}
 	
 	// Don't restore pages - they were closed when session was closed

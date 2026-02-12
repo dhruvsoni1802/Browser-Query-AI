@@ -104,6 +104,46 @@ func (m *Manager) GetPageContent(sessionID string, pageID string) (string, error
 	return content, nil
 }
 
+// AnalyzePage extracts the structural overview of a page
+func (m *Manager) AnalyzePage(sessionID string, pageID string) (*PageStructure, error) {
+	// Get the session from the manager
+	session, err := m.GetSession(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get session: %w", err)
+	}
+
+	// Verify that the page ID is in the session
+	if !slices.Contains(session.PageIDs, pageID) {
+		return nil, fmt.Errorf("page not found in session: %s", pageID)
+	}
+
+	// Analyze the page structure
+	structure, err := session.AnalyzePage(pageID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to analyze page: %w", err)
+	}
+
+	// Update the last activity time of the session
+	session.UpdateActivity()
+
+	// Return the structure
+	return structure, nil
+}
+
+// InvalidatePageAnalysis clears the cached analysis for a specific page in a session
+func (m *Manager) InvalidatePageAnalysis(sessionID string, pageID string) error {
+	// Get the session from the manager
+	session, err := m.GetSession(sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to get session: %w", err)
+	}
+
+	// Clear the cache for this page
+	session.InvalidatePageAnalysis(pageID)
+
+	return nil
+}
+
 // ClosePage closes a specific page in the session
 func (m *Manager) ClosePage(sessionID string, pageID string) error {
 	// Get the session from the manager

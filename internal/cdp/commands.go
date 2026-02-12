@@ -94,3 +94,5 @@ func (c *Client) GetBrowserVersion() (map[string]string, error) {
 
 	return version, nil
 }
+
+

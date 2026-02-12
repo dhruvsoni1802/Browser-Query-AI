@@ -164,6 +164,18 @@ type RenameSessionRequest struct {
 }
 
 
+// AnalyzePageRequest for POST /sessions/{id}/analyze
+type AnalyzePageRequest struct {
+	PageID string `json:"page_id" validate:"required"`
+}
+
+// AnalyzePageResponse returned after page analysis
+type AnalyzePageResponse struct {
+	SessionID string                  `json:"session_id"`
+	PageID    string                  `json:"page_id"`
+	Analysis  *session.PageStructure  `json:"analysis"`
+}
+
 // Common error codes
 const (
 	ErrCodeSessionNotFound     = "SESSION_NOT_FOUND"
@@ -173,5 +185,6 @@ const (
 	ErrCodeNavigationFailed    = "NAVIGATION_FAILED"
 	ErrCodeExecutionFailed     = "EXECUTION_FAILED"
 	ErrCodeScreenshotFailed    = "SCREENSHOT_FAILED"
+	ErrCodeAnalysisFailed      = "ANALYSIS_FAILED"
 	ErrCodeInternalError       = "INTERNAL_ERROR"
 )

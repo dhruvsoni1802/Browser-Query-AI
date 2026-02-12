@@ -31,6 +31,8 @@ type Session struct {
 	CreatedAt    time.Time       // When session was created
 	LastActivity time.Time       // Last time session was used
 	Status       SessionStatus   // Current session status
+
+	pageAnalysisCache map[string]*PageStructure // Cached page analysis results, keyed by pageID
 }
 
 // IsExpired checks if the session has been inactive too long
