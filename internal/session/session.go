@@ -122,6 +122,23 @@ func (s *Session) ExecuteJavascript(targetID string, code string) (interface{}, 
 	return response.Result.Value, nil
 }
 
+// WaitForReady waits until document.readyState is interactive/complete or timeout.
+func (s *Session) WaitForReady(targetID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		result, err := s.ExecuteJavascript(targetID, "document.readyState")
+		if err == nil {
+			if state, ok := result.(string); ok {
+				if state == "interactive" || state == "complete" {
+					return nil
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("page did not reach ready state within %s", timeout)
+}
+
 // GetPageContent gets the HTML content of a page
 func (s *Session) GetPageContent(targetID string) (string, error) {
 	// Step 1: Get document

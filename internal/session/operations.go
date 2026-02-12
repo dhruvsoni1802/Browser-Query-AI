@@ -2,7 +2,9 @@ package session
 
 import (
 	"fmt"
+	"log/slog"
 	"slices"
+	"time"
 )
 
 // Navigate navigates to a URL and creates a new page in the session
@@ -21,6 +23,11 @@ func (m *Manager) Navigate(sessionID string, url string) (string, error) {
 
 	// Add the page ID to the session
 	session.AddPage(pageID)
+
+	// Best-effort wait for page readiness
+	if err := session.WaitForReady(pageID, 10*time.Second); err != nil {
+		slog.Warn("page did not reach ready state before timeout", "page_id", pageID, "error", err)
+	}
 
 	// Return the page ID
 	return pageID, nil
